@@ -4,7 +4,7 @@ const open = require('opn');
 
 const jobEndpoint = process.argv[2];
 var requestOptions = {
-  host: 'ds-build1.in.wellcentive.com',
+  host: '',
   port: 8080,
   path: jobEndpoint + '/lastBuild/api/json'
 }
