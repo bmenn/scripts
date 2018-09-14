@@ -1,20 +1,31 @@
-#!/usr/bin/env python2
+#!/usr/bin/env python3
+import configparser
+import os
 import re
 import json
 import requests
+import datetime
+import time
 import arrow
 
-API_KEY = ''
-AUTH = (API_KEY, 'api_token')
-JIRA_URL = ''
-JIRA_API = 'rest/api/2'
-JIRA_AUTH = ('', '')
+CONFIG = configparser.ConfigParser()
+CONFIG.read(os.path.expanduser('~/.atlassianrc'))
+
+JIRA_API_KEY = CONFIG['atlassian']['api_token']
+JIRA_USER = CONFIG['atlassian']['user']
+JIRA_AUTH = (JIRA_USER, JIRA_API_KEY)
+JIRA_URL = CONFIG['atlassian']['domain']
+JIRA_API = 'rest/api/3'
+JIRA_AUTH = (R, JIRA_API_KEY)
+
+TOGGL_API_KEY = CONFIG['toggl']['api_token']
+TOGGL_AUTH = (TOGGL_API_KEY, 'api_token')
 TOGGL_URL = 'https://www.toggl.com'
 TOGGL_STD_API = 'api/v8'
 TOGGL_REPORT_API = 'reports/api/v2'
 JIRA_LOGGED = 'jira-logged'
 IS_LOGGED_REGEX = re.compile(JIRA_LOGGED)
-DS_REGEX = re.compile(r'DS-\d+')
+ISSUE_REGEX = re.compile(CONFIG['toggl']['issue_regex'])
 
 
 def is_logged(entry):
@@ -39,7 +50,7 @@ def mark_logged(entries):
         },
     })
 
-    response = requests.put(url, data=data, auth=AUTH)
+    response = requests.put(url, data=data, auth=TOGGL_AUTH)
     response.raise_for_status()
 
 
@@ -74,57 +85,56 @@ def process_report_page(page_data, ticket_work_log):
     for entry in page_data:
         if is_logged(entry):
             continue
-        tickets = [t for t in entry['tags'] if DS_REGEX.match(t)]
-        for t in tickets:
-            ticket_work_log[t].append({
-                'entry_id': entry['id'],
-                'start': entry['start'],
-                'end': entry['end'],
-            })
+
+        match_issue = ISSUE_REGEX.match(entry['description'])
+        if match_issue:
+            t = match_issue[0]
+            try:
+                ticket_work_log[t].append({
+                    'entry_id': entry['id'],
+                    'start': entry['start'],
+                    'end': entry['end'],
+                })
+            except KeyError:
+                ticket_work_log[t] = [{
+                    'entry_id': entry['id'],
+                    'start': entry['start'],
+                    'end': entry['end'],
+                }]
 
     return ticket_work_log
 
 
 def main():
     response = requests.get('/'.join([TOGGL_URL, TOGGL_STD_API, 'workspaces']),
-                            auth=AUTH)
+                            auth=TOGGL_AUTH)
 
     workspace_ids = {w['name']: w['id'] for w in response.json()}
 
-    workspace = workspace_ids['Wellcentive']
+    workspace = workspace_ids[CONFIG['toggl']['workspace']]
 
     response = requests.get(
         '/'.join([TOGGL_URL, TOGGL_STD_API, 'workspaces', str(workspace), 'tags']),
-        auth=AUTH
+        auth=TOGGL_AUTH
     )
 
-    tags = {
-        t['name']: t['id']
-        for t in response.json()
-        if DS_REGEX.match(t['name'])
-    }
-    ticket_work_log = {
-        t['name']: []
-        for t in response.json()
-        if DS_REGEX.match(t['name'])
-    }
-
+    searchback_date = datetime.date.today() - datetime.timedelta(days=30)
     url_params = {
         'page': 1,
         'workspace_id': workspace,
         'user_agent': 'test_api',
-        'since': '2017-09-01',  # TODO: Change me
-        'tag_ids': ','.join([str(e) for e in tags.values()]),
+        'since': searchback_date.isoformat(),
     }
 
     url = (
         '/'.join([TOGGL_URL, TOGGL_REPORT_API, 'details?']) +
-        '&'.join('='.join((str(k), str(v))) for k, v in url_params.iteritems())
+        '&'.join('='.join((str(k), str(v))) for k, v in url_params.items())
     )
-    response = requests.get(url, auth=AUTH)
+    response = requests.get(url, auth=TOGGL_AUTH)
     response.raise_for_status()
 
     response_json = response.json()
+    ticket_work_log = {}
     while len(response_json['data']) > 0:
         ticket_work_log = process_report_page(response_json['data'],
                                               ticket_work_log)
@@ -132,19 +142,19 @@ def main():
         url_params['page'] += 1
         url = (
             '/'.join([TOGGL_URL, TOGGL_REPORT_API, 'details?']) +
-            '&'.join('='.join((str(k), str(v))) for k, v in url_params.iteritems())
+            '&'.join('='.join((str(k), str(v))) for k, v in url_params.items())
         )
-        response = requests.get(url, auth=AUTH)
+        response = requests.get(url, auth=TOGGL_AUTH)
         response.raise_for_status()
         response_json = response.json()
 
     ticket_work_log = process_report_page(response_json['data'],
                                           ticket_work_log)
 
-
     tickets_to_update = len(ticket_work_log)
-    for i, (ticket, entries) in enumerate(ticket_work_log.iteritems()):
-        print 'Updating %s with %d entries (%d/%d)' % (ticket, len(entries), i, tickets_to_update)
+    for i, (ticket, entries) in enumerate(ticket_work_log.items()):
+        print('Updating %s with %d entries (%d/%d)' %
+              (ticket, len(entries), i, tickets_to_update))
         log_to_jira(ticket, entries)
         mark_logged(entries)
 
