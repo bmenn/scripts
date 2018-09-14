@@ -1,4 +1,19 @@
 #!/usr/bin/env python3
+"""Sync toggle time entries to JIRA
+
+Requires a config file at ~/.atlassianrc, formatted like:
+
+    [atlassian]
+    api_token=<atlassian_api_token>
+    domain=https://<jira_domain>.atlassian.net
+    user=<user>
+
+    [toggl]
+    issue_regex=<issue_regex>
+    api_token=<toggl_api_token>
+    workspace=<toggle_workspace_to_search
+
+"""
 import configparser
 import os
 import re
@@ -16,7 +31,7 @@ JIRA_USER = CONFIG['atlassian']['user']
 JIRA_AUTH = (JIRA_USER, JIRA_API_KEY)
 JIRA_URL = CONFIG['atlassian']['domain']
 JIRA_API = 'rest/api/3'
-JIRA_AUTH = (R, JIRA_API_KEY)
+JIRA_AUTH = (JIRA_USER, JIRA_API_KEY)
 
 TOGGL_API_KEY = CONFIG['toggl']['api_token']
 TOGGL_AUTH = (TOGGL_API_KEY, 'api_token')
@@ -73,11 +88,14 @@ def log_to_jira(ticket, entries):
     )
     for e in entries:
         data = json.dumps({
-            'started': arrow.get(e['start']).format('YYYY-MM-DDTHH:mm:ss.SSSZ'),
-            'timeSpentSeconds': secondsSpent(e['start'], e['end'])
+            'started': arrow.get(e['start']).format('YYYY-MM-DDTHH:mm:ss.000Z'),
+            'timeSpentSeconds': int(secondsSpent(e['start'], e['end'])),
+            'comment': {},      # JIRA API wants the comment field even if empty
         })
         response = requests.post(url, data=data, auth=JIRA_AUTH,
-                                 headers={'content-type': 'application/json'})
+                                 headers={'Content-Type':
+                                          'application/json'},
+                                 verify=True)
         response.raise_for_status()
 
 
